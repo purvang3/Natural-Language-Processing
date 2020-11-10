@@ -1,7 +1,7 @@
 """
 Author: Purvang Lapsiwala
 Description:
-    This file contains the code to for Nueral Machine Translation model to convert Text in English language to
+    This file contains the code for Nueral Machine Translation model to convert Text in English language to
     German language using encoder , decoder and attention method
 Packages: trax, numpy
 """
@@ -17,7 +17,7 @@ from trax.supervised import training
 # ====================================================================================================================
 
 VOCAB_FILE = 'ende_32k.subword'
-VOCAB_DIR = '/content/'
+VOCAB_DIR = ' Nueral_Machine_Translation_With_Attention/data/'
 EOS = 1
 
 # ====================================================================================================================
@@ -79,6 +79,7 @@ def tokenize(input_str, vocab_file=None, vocab_dir=None):
 
     """
     global EOS
+    # tokenize method operated with stream. so iter and next is used to get stream from array
     inputs = next(trax.data.tokenize(iter([input_str]), vocab_file=vocab_file, vocab_dir=vocab_dir))
     inputs = list(inputs) + [EOS]
     batch_inputs = np.reshape(np.array(inputs), [1, -1])

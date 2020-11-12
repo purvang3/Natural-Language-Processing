@@ -138,7 +138,7 @@ def input_encoder_fn(input_vocab_size, d_model, n_encoder_layers):
     """
     input_encoder = tl.Serial(
         # create an embedding layer to convert tokens to vectors
-        tl.Embedding(vocab_size=input_vocab_size, d_feature=d_model), #(B,L) -> (B, D)
+        tl.Embedding(vocab_size=input_vocab_size, d_feature=d_model),  # (B,input_vocab_size) -> (B, d_model)
 
         # feed the embeddings to the LSTM layers. It is a stack of n_encoder_layers LSTM layers
         [tl.LSTM(n_units=d_model) for _ in range(n_encoder_layers)]
@@ -189,20 +189,19 @@ def prepare_attention_input(encoder_activations, decoder_activations, inputs):
         queries, keys, values and mask for attention.
     """
     # set the keys and values to the encoder activations
-    keys = encoder_activations
+    keys = encoder_activations  # (32, 64, 1024)
     values = encoder_activations
 
     # set the queries to the decoder activations
     queries = decoder_activations
 
     # generate the mask to distinguish real tokens from padding
-    mask = inputs != 0
+    mask = inputs != 0  # --> (32, 64)
 
     # add axes to the mask for attention heads and decoder length.
-    mask = fastnp.reshape(mask, (mask.shape[0], 1, 1, mask.shape[1])) # (B, heads, decoder_len, encoder_len)
+    mask = fastnp.reshape(mask, (mask.shape[0], 1, 1, mask.shape[1]))  # (32, 1, 1, 64)
     # broadcast so mask shape is [batch size, attention heads, decoder-len, encoder-len].
-    # note: for this assignment, attention heads is set to 1.
-    mask = mask + fastnp.zeros((1, 1, decoder_activations.shape[1], 1))
+    mask = mask + fastnp.zeros((1, 1, decoder_activations.shape[1], 1))  # (32, 1, 64, 64)
 
     return queries, keys, values, mask
 
@@ -225,3 +224,96 @@ def AttentionQKV(d_feature, n_heads=1, dropout=0.0, mode='train'):
         PureAttention(n_heads=n_heads, dropout=dropout, mode=mode),
         core.Dense(d_feature),
     )
+
+
+def NMTAttn(input_vocab_size=33300,
+            target_vocab_size=33300,
+            d_model=1024,
+            n_encoder_layers=2,
+            n_decoder_layers=2,
+            n_attention_heads=4,
+            attention_dropout=0.0,
+            mode='train'):
+    """Returns an LSTM sequence-to-sequence model with attention.
+
+    The input to the model is a pair (input tokens, target tokens), e.g.,
+    an English sentence (tokenized) and its translation into German (tokenized).
+
+    Args:
+    input_vocab_size: int: vocab size of the input
+    target_vocab_size: int: vocab size of the target
+    d_model: int:  depth of embedding (n_units in the LSTM cell)
+    n_encoder_layers: int: number of LSTM layers in the encoder
+    n_decoder_layers: int: number of LSTM layers in the decoder after attention
+    n_attention_heads: int: number of attention heads
+    attention_dropout: float, dropout for the attention layer
+    mode: str: 'train', 'eval' or 'predict', predict mode is for fast inference
+
+    Returns:
+    A LSTM sequence-to-sequence model with attention.
+    """
+
+    # creation of input encoder for encoder activations
+    input_encoder = input_encoder_fn(input_vocab_size, d_model, n_encoder_layers)
+
+    # creation of layers for the pre-attention decoder
+    pre_attention_decoder = pre_attention_decoder_fn(mode, target_vocab_size, d_model)
+
+    # Model
+    model = tl.Serial(
+
+        # copy input tokens and target tokens for later use.
+        tl.Select([0, 1, 0, 1]),
+
+       # parellel run of input encoder on the input and pre-attention decoder the target.
+        tl.Parallel(input_encoder, pre_attention_decoder),
+
+        # preparation of queries, keys, values and mask for attention.
+        tl.Fn('PrepareAttentionInput', prepare_attention_input, n_out=4),
+
+        # AttentionQKV layer nested it inside a Residual layer to add to the pre-attention decoder activations
+        tl.Residual(tl.AttentionQKV(d_model, n_heads=n_attention_heads, dropout=attention_dropout, mode=mode)),
+        tl.Select([0, 2]),
+
+        # run the rest of the RNN decoder
+        [tl.LSTM(n_units=d_model) for _ in range(n_decoder_layers)],
+
+        # Dense layer of target size
+        tl.Dense(target_vocab_size),
+
+       #Log-softmax for output
+        tl.LogSoftmax()
+    )
+
+    return model
+
+
+model = NMTAttn()
+# print(model)
+
+train_task = training.TrainTask(
+    labeled_data=train_batch_data,
+    loss_layer=tl.CrossEntropyLoss(),
+    optimizer=trax.optimizers.Adam(0.01),
+    lr_schedule=trax.lr.warmup_and_rsqrt_decay(1000, 0.01),
+    n_steps_per_checkpoint=20,
+)
+
+eval_task = training.EvalTask(
+    labeled_data=eval_batch_data,
+    metrics=[tl.CrossEntropyLoss(), tl.Accuracy()],
+)
+
+output_dir = 'Nueral_Machine_Translation_With_Attention/output_dir/'
+model_file_path = os.path.join(output_dir,"model.pkl.gz")
+# # remove old model if it exists. restarts training.
+if os.path.exists(model_file_path):
+    os.remove(model_file_path)
+
+# define the training loop
+training_loop = training.Loop(NMTAttn(mode='train'),
+                              train_task,
+                              eval_tasks=[eval_task],
+                              output_dir=output_dir)
+
+training_loop.run(3)

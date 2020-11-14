@@ -1,8 +1,8 @@
 """
-Author: Purvang Lapsiwala
+Purvang Lapsiwala
 Description:
-    This file contains the code for Text to Text transfer and Question Answering using
-    Bidirectional Encoder Decoder Model (BERT)
+    This file contains the code for problems of Text to Text transfer and Question Answering using
+    Transformer Encoder Block. (Transformers)
 Packages: trax, numpy
 """
 
@@ -144,3 +144,172 @@ def tokenize_and_mask(text, vocab_size=vocab_size, noise=0.15, randomizer=np.ran
 inputs_targets_pairs = [tokenize_and_mask(text) for text in natural_language_texts]
 
 # ====================================================================================================================
+# Transformer
+
+# Transformer Encoder
+
+
+def FeedForwardBlock(d_model, d_ff, dropout, dropout_shared_axes, mode, activation):
+    """Returns a list of layers implementing a feed-forward block.
+    Args:
+        d_model: int:  depth of embedding
+        d_ff: int: depth of feed-forward layer
+        dropout: float: dropout rate (how much to drop out)
+        dropout_shared_axes: list of integers, axes to share dropout mask
+        mode: str: 'train' or 'eval'
+        activation: the non-linearity in feed-forward layer
+    Returns:
+        A list of layers which maps vectors to vectors.
+    """
+
+    dropout_middle = tl.Dropout(rate=dropout,
+                                shared_axes=dropout_shared_axes,
+                                mode=mode)
+
+    dropout_final = tl.Dropout(rate=dropout,
+                               shared_axes=dropout_shared_axes,
+                               mode=mode)
+
+    ff_block = [
+        # trax Layer normalization
+        tl.LayerNorm(),
+        # trax Dense layer using `d_ff`
+        tl.Dense(d_ff),
+        # activation() layer - you need to call (use parentheses) this func!
+        activation(),
+        # dropout middle layer
+        dropout_middle,
+        # trax Dense layer using `d_model`
+        tl.Dense(d_model),
+        # dropout final layer
+        dropout_final,
+    ]
+
+    return ff_block
+
+
+# Complete encoder block. we will use Feed Forward block just created above.
+
+def EncoderBlock(d_model, d_ff, n_heads, dropout, dropout_shared_axes,
+                 mode, ff_activation, FeedForwardBlock=FeedForwardBlock):
+    """
+    Returns a list of layers that implements a Transformer encoder block.
+    The input to the layer is a pair, (activations, mask), where the mask was
+    created from the original source tokens to prevent attending to the padding
+    part of the input.
+
+    Args:
+        d_model (int): depth of embedding.
+        d_ff (int): depth of feed-forward layer.
+        n_heads (int): number of attention heads.
+        dropout (float): dropout rate (how much to drop out).
+        dropout_shared_axes (int): axes on which to share dropout mask.
+        mode (str): 'train' or 'eval'.
+        ff_activation (function): the non-linearity in feed-forward layer.
+        FeedForwardBlock (function): A function that returns the feed forward block.
+    Returns:
+        list: A list of layers that maps (activations, mask) to (activations, mask).
+
+    """
+
+    # Attention block
+    attention = tl.Attention(
+        # dimension of the model
+        d_feature=d_model,
+        # number of attention heads
+        n_heads=n_heads,
+        # `dropout`
+        dropout=dropout,
+        # `mode`
+        mode=mode
+    )
+
+    # calling function `FeedForwardBlock
+    feed_forward = FeedForwardBlock(
+        d_model,
+        d_ff,
+        dropout,
+        dropout_shared_axes,
+        mode,
+        ff_activation
+    )
+
+    # Dropout block
+    dropout_ = tl.Dropout(
+        rate=dropout,
+        shared_axes=dropout_shared_axes,
+        mode=mode
+    )
+
+    encoder_block = [
+        # `Residual` layer
+        tl.Residual(
+            tl.LayerNorm(),
+            attention,
+            dropout_,
+        ),
+        tl.Residual(
+            feed_forward,
+        ),
+    ]
+    return encoder_block
+
+
+def TransformerEncoder(vocab_size=vocab_size,
+                       n_classes=10,
+                       d_model=512,
+                       d_ff=2048,
+                       n_layers=6,
+                       n_heads=8,
+                       dropout=0.1,
+                       dropout_shared_axes=None,
+                       max_len=2048,
+                       mode='train',
+                       ff_activation=tl.Relu,
+                       EncoderBlock=EncoderBlock):
+    """
+    Returns a Transformer encoder model.
+    The input to the model is a tensor of tokens.
+
+    Args:
+        vocab_size (int): vocab size. Defaults to vocab_size.
+        n_classes (int): how many classes on output. Defaults to 10.
+        d_model (int): depth of embedding. Defaults to 512.
+        d_ff (int): depth of feed-forward layer. Defaults to 2048.
+        n_layers (int): number of encoder/decoder layers. Defaults to 6.
+        n_heads (int): number of attention heads. Defaults to 8.
+        dropout (float): dropout rate (how much to drop out). Defaults to 0.1.
+        dropout_shared_axes (int): axes on which to share dropout mask. Defaults to None.
+        max_len (int): maximum symbol length for positional encoding. Defaults to 2048.
+        mode (str): 'train' or 'eval'. Defaults to 'train'.
+        ff_activation (function): the non-linearity in feed-forward layer. Defaults to tl.Relu.
+        EncoderBlock (function): Returns the encoder block. Defaults to EncoderBlock.
+
+    Returns:
+        trax.layers.combinators.Serial: A Transformer model as a layer that maps
+        from a tensor of tokens to activations over a set of output classes.
+    """
+
+    positional_encoder = [
+        tl.Embedding(vocab_size, d_model),
+        tl.Dropout(rate=dropout, shared_axes=dropout_shared_axes, mode=mode),
+        tl.PositionalEncoding(max_len=max_len)
+    ]
+
+    # repeatation of Encoder block upto number of layers
+    encoder_blocks = [EncoderBlock(d_model, d_ff, n_heads, dropout,
+                                   dropout_shared_axes, mode, ff_activation) for _ in range(n_layers)]
+
+    # Encoder Model
+    return tl.Serial(
+        tl.Branch(
+            positional_encoder,
+            tl.PaddingMask(),
+        ),
+        encoder_blocks,
+        tl.Select([0], n_in=2),
+        tl.LayerNorm(),
+        tl.Mean(axis=1),
+        tl.Dense(n_classes),
+        tl.LogSoftmax(),
+    )

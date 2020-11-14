@@ -1,5 +1,5 @@
 """
-Author: Purvang Lapsiwala
+Purvang Lapsiwala
 Description:
     This file contains the code for Nueral Machine Translation model to convert Text in English language to
     German language using encoder , decoder and attention method. (Encoder Decoder attention)

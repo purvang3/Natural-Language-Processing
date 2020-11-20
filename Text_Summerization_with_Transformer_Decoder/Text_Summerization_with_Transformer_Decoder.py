@@ -237,10 +237,7 @@ def CausalAttention(d_feature,
         ),
 
         tl.Fn('DotProductAttn', dot_product_self_attention, n_out=1),
-        # HINT: The second argument to tl.Fn() is an uncalled function
-        # Since you are dealing with closures you might need to call the outer
-        # function with the correct parameters to get the actual uncalled function.
-        tl.Fn('AttnOutput', compute_attention_output_closure(n_heads, d_head), n_out=1),  # to allow for parallel
+        tl.Fn('AttnOutput', compute_attention_output_closure(n_heads, d_head), n_out=1),
         tl.Dense(d_feature)  # Final dense layer
     )
 
@@ -263,41 +260,28 @@ def DecoderBlock(d_model, d_ff, n_heads,
         list: list of trax.layers.combinators.Serial that maps an activation tensor to an activation tensor.
     """
 
-    # Create masked multi-head attention block using CausalAttention function
     causal_attention = CausalAttention(
         d_model,
         n_heads=n_heads,
         mode=mode
     )
 
-    # Create feed-forward block (list) with two dense layers with dropout and input normalized
     feed_forward = [
-        # Normalize layer inputs
         tl.LayerNorm(),
-        # Add first feed forward (dense) layer (don't forget to set the correct value for n_units)
         tl.Dense(d_ff),
-        # Add activation function passed in as a parameter (you need to call it!)
-        ff_activation(),  # Generally ReLU
-        # Add dropout with rate and mode specified (i.e., don't use dropout during evaluation)
+        ff_activation(),
         tl.Dropout(rate=dropout, mode=mode),
-        # Add second feed forward layer (don't forget to set the correct value for n_units)
         tl.Dense(d_model),
-        # Add dropout with rate and mode specified (i.e., don't use dropout during evaluation)
         tl.Dropout(rate=dropout, mode=mode)
     ]
 
-    # Add list of two Residual blocks: the attention with normalization and dropout and feed-forward blocks
     return [
         tl.Residual(
-            # Normalize layer input
             tl.LayerNorm(),
-            # Add causal attention block previously defined (without parentheses)
             causal_attention,
-            # Add dropout with rate and mode specified
             tl.Dropout(rate=dropout, mode=mode)
         ),
         tl.Residual(
-            # Add feed forward block (without parentheses)
             feed_forward
         ),
     ]
